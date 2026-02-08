@@ -3,3 +3,4 @@ package-lock.json
 .github/
 *.txt
 dist/
+00-*.md

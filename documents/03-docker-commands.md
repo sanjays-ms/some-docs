@@ -365,14 +365,530 @@ on Docker Desktop through WSL2, and has access to 16 CPUs and roughly 31 GB of m
 
 ---
 
+## docker build
+
+### Purpose
+
+The `docker build` command reads a Dockerfile, executes each instruction in order,
+and produces an image. This is the command that transforms a Dockerfile (a text file
+with instructions) into a usable image that can be run as a container.
+
+### Syntax
+
+```
+docker build [options] <build_context>
+```
+
+The most common form is:
+
+```
+docker build -t <image_name> .
+```
+
+### Build Context
+
+The **build context** is the directory path provided at the end of the `docker build`
+command. In most cases, this is `.` (a single dot), which represents the current
+working directory.
+
+The build context serves two purposes:
+
+1. **Locating the Dockerfile (when `-f` is not used):** If no `-f` flag is provided,
+   Docker looks for a file named exactly `Dockerfile` (capital D, no file extension)
+   inside the build context directory. If it does not find one, the build fails.
+
+2. **Defining the files available to COPY instructions:** The build context determines
+   which files from the host machine can be copied into the image. When a Dockerfile
+   contains `COPY . .`, the first `.` refers to "everything in the build context."
+   Docker sends the entire build context directory (minus files excluded by
+   `.dockerignore`) to the Docker engine before the build begins.
+
+The build context **always** defines the pool of files available to COPY, regardless
+of whether `-f` is used. However, it only helps locate the Dockerfile when `-f` is
+not specified.
+
+| Situation                      | Build context locates Dockerfile? | Build context defines COPY files? |
+|--------------------------------|-----------------------------------|-----------------------------------|
+| `-f` flag is **not** used      | Yes                               | Yes                               |
+| `-f` flag **is** used          | No (the `-f` flag handles this)   | Yes                               |
+
+### Example: Building from the Current Directory
+
+```
+docker build -t my-app .
+```
+
+This tells Docker:
+- `-t my-app` -- Name the resulting image "my-app."
+- `.` -- Use the current directory as the build context. Look for a `Dockerfile`
+  in this directory and make all files in this directory available to COPY.
+
+Docker then:
+1. Checks the current directory for a file named `Dockerfile`.
+2. Sends all files in the current directory (excluding those in `.dockerignore`)
+   to the Docker engine.
+3. Reads the Dockerfile and executes each instruction in order.
+4. Produces an image named `my-app:latest`.
+
+### Sample Output (Successful Build)
+
+```
+[+] Building 25.3s (10/10) FINISHED
+ => [internal] load build definition from Dockerfile                       0.0s
+ => => transferring dockerfile: 532B                                       0.0s
+ => [internal] load .dockerignore                                          0.0s
+ => => transferring context: 95B                                           0.0s
+ => [internal] load metadata for docker.io/library/node:24.13.0-trixie-slim  1.2s
+ => [1/5] FROM docker.io/library/node:24.13.0-trixie-slim@sha256:abc123   8.4s
+ => [internal] load build context                                          0.0s
+ => => transferring context: 1.23kB                                        0.0s
+ => [2/5] WORKDIR /app                                                     0.1s
+ => [3/5] COPY . .                                                         0.0s
+ => [4/5] RUN npm install                                                 10.2s
+ => [5/5] RUN npm run build                                                3.1s
+ => exporting to image                                                     2.3s
+ => => naming to docker.io/library/my-app:latest                           0.0s
+```
+
+Each line corresponds to a step in the Dockerfile:
+- **[1/5] FROM** -- Pulling or using the base image.
+- **[2/5] WORKDIR** -- Setting the working directory.
+- **[3/5] COPY** -- Copying project files into the image.
+- **[4/5] RUN npm install** -- Installing dependencies.
+- **[5/5] RUN npm run build** -- Compiling TypeScript.
+- **exporting to image** -- Finalizing and saving the image.
+
+If any step fails, the build stops immediately and prints an error message. A
+successful build completes all steps without errors.
+
+### Sample Output (Failed Build)
+
+If the Dockerfile contains an error (for example, a RUN command that fails), the
+output would look like:
+
+```
+[+] Building 12.1s (9/10) ERROR
+ => [4/5] RUN npm install                                                 10.2s
+ => ERROR [5/5] RUN npm run build                                          1.9s
+------
+ > [5/5] RUN npm run build:
+ > error TS6053: File 'app.ts' not found.
+------
+ERROR: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 2
+```
+
+The error message indicates which step failed and why. In this example, the
+TypeScript compiler could not find `app.ts`, causing the build to fail at step 5.
+
+---
+
+## docker build -t (Tagging an Image)
+
+### Purpose
+
+The `-t` flag (short for "tag") assigns a **name** to the image being built. Without
+it, the image is only identified by a randomly generated Image ID (a long hash),
+which is difficult to reference and manage.
+
+### Syntax
+
+```
+docker build -t <name> .
+docker build -t <name>:<tag> .
+```
+
+- `<name>` -- The name to assign to the image.
+- `<tag>` -- An optional version label. If omitted, Docker defaults to `latest`.
+
+### Examples
+
+**Build with just a name (tag defaults to "latest"):**
+
+```
+docker build -t my-app .
+```
+
+The resulting image is named `my-app:latest`.
+
+**Build with a name and a specific version tag:**
+
+```
+docker build -t my-app:1.0 .
+```
+
+The resulting image is named `my-app:1.0`. This is useful for keeping track of
+different versions of the same application.
+
+**Build with multiple tags:**
+
+```
+docker build -t my-app:1.0 -t my-app:latest .
+```
+
+The same image gets two tags: `my-app:1.0` and `my-app:latest`. Both point to
+the exact same image. This is commonly done so that `latest` always refers to
+the most recent version.
+
+### With -t vs Without -t
+
+| Scenario     | Image identifier in `docker images`          | Easy to reference? |
+|--------------|----------------------------------------------|--------------------|
+| With `-t`    | `my-app:latest`                              | Yes                |
+| Without `-t` | `<none>:<none>` (only the Image ID is shown) | No                 |
+
+When viewing containers created from an unnamed image, the IMAGE column in
+`docker ps -a` shows only the Image ID hash instead of a readable name:
+
+```
+CONTAINER ID   IMAGE          NAMES
+ffe521c05ead   ad28b069f374   funny_yalow
+```
+
+Compared to a named image:
+
+```
+CONTAINER ID   IMAGE          NAMES
+49a2849431b0   my-app         clever_thompson
+```
+
+The `-t` flag is technically optional, but in practice it should always be used.
+There is no benefit to having unnamed images.
+
+---
+
+## docker build -f (Specifying a Dockerfile)
+
+### Purpose
+
+The `-f` flag (short for "file") tells Docker to use a **specific Dockerfile**
+instead of looking for the default file named `Dockerfile`. This is necessary when
+a project contains multiple Dockerfiles for different purposes.
+
+### Syntax
+
+```
+docker build -t <name> -f <dockerfile_path> <build_context>
+```
+
+- `<dockerfile_path>` -- The path to the Dockerfile to use. This can be a filename
+  in the current directory or a path to a file in a different location.
+- `<build_context>` -- The directory to use as the build context (still required).
+
+### When This is Needed
+
+Projects sometimes have multiple Dockerfiles for different environments or purposes:
+
+```
+project/
+  Dockerfile           (default -- used for production)
+  Dockerfile.dev       (development configuration with extra debugging tools)
+  Dockerfile.prod      (optimized production build)
+  Dockerfile.test      (includes testing frameworks)
+```
+
+Without `-f`, Docker always looks for the file named `Dockerfile`. To use any of
+the others, the `-f` flag is required.
+
+### Examples
+
+**Build using a development Dockerfile:**
+
+```
+docker build -t my-app-dev -f Dockerfile.dev .
+```
+
+Docker reads `Dockerfile.dev` instead of `Dockerfile`. The build context is still
+`.` (the current directory), so COPY instructions can still access all project files.
+
+**Build using a production Dockerfile:**
+
+```
+docker build -t my-app-prod -f Dockerfile.prod .
+```
+
+**Build using a Dockerfile in a subdirectory:**
+
+```
+docker build -t my-app -f docker/Dockerfile.prod .
+```
+
+The Dockerfile is at `docker/Dockerfile.prod`, but the build context is still `.`
+(the project root). This means COPY instructions can access files from the project
+root, even though the Dockerfile is in a subdirectory.
+
+### Important Notes
+
+- When `-f` is used, the build context (`.`) no longer determines where Docker
+  looks for the Dockerfile. It is only used to define the files available to COPY.
+- The `-f` flag accepts both relative and absolute paths.
+- If the specified file does not exist, Docker prints an error and the build fails.
+
+---
+
+## Verifying a Successful Build
+
+After running `docker build`, there are several ways to confirm the image was
+created correctly.
+
+### Method 1: Check the Build Output
+
+A successful build completes all steps and ends with a line similar to:
+
+```
+ => exporting to image                                                     2.3s
+ => => naming to docker.io/library/my-app:latest                           0.0s
+```
+
+If any step had failed, Docker would have printed an error and stopped. Reaching
+the end without errors means the build succeeded.
+
+### Method 2: List Images with docker images
+
+Run:
+
+```
+docker images
+```
+
+The newly built image should appear in the list:
+
+```
+IMAGE             ID             DISK USAGE   CONTENT SIZE
+my-app:latest     a1b2c3d4e5f6       285MB        120MB
+```
+
+If the image appears with the correct name and tag, the build was successful.
+
+### Method 3: Run the Image
+
+The most reliable verification is to run the image and confirm it behaves as
+expected:
+
+```
+docker run my-app
+```
+
+If the application produces the correct output (in this case, "Hello Docker"),
+the image was built correctly and is fully functional.
+
+### Method 4: Inspect the Image
+
+For more detailed information about the image, use:
+
+```
+docker inspect <image_name>
+```
+
+This prints a large JSON output containing everything about the image: its layers,
+environment variables, the CMD instruction, creation date, size, and more. This is
+mainly useful for debugging or advanced verification.
+
+---
+
+## Image Tags
+
+### What is a Tag?
+
+A tag is a **label** attached to an image that identifies a specific version of it.
+The full name of an image follows this format:
+
+```
+<image_name>:<tag>
+```
+
+For example:
+- `my-docker-app:latest` -- The image named "my-docker-app" with the tag "latest."
+- `my-docker-app:1.0` -- The same image name but with a version tag of "1.0."
+- `node:24.13.0-trixie-slim` -- The official Node.js image with a tag that specifies
+  the exact Node.js version, the Debian distribution, and the slim variant.
+
+### The "latest" Tag
+
+When an image is built or pulled without specifying a tag, Docker automatically
+assigns the tag `latest`. This is the default tag.
+
+These two commands produce the exact same result:
+
+```
+docker build -t my-app .
+docker build -t my-app:latest .
+```
+
+Both create an image named `my-app:latest`.
+
+Similarly, these two run commands are identical:
+
+```
+docker run my-app
+docker run my-app:latest
+```
+
+Both look for the image `my-app:latest` on the local machine.
+
+### Common Misconception: "latest" Does Not Mean "Most Recent"
+
+The name `latest` is misleading. It does **not** automatically point to the most
+recently built version of an image. It is simply a tag name -- a label like any
+other.
+
+Consider this sequence:
+
+```
+docker build -t my-app:1.0 .
+# (make code changes)
+docker build -t my-app:2.0 .
+```
+
+After these two builds, there is no `my-app:latest` image. Docker created
+`my-app:1.0` and `my-app:2.0`, but `latest` was never assigned because a specific
+tag was provided each time. Running `docker run my-app` would fail because Docker
+would look for `my-app:latest`, which does not exist.
+
+The `latest` tag only exists if:
+- A build was done without any tag: `docker build -t my-app .`
+- A build explicitly used the `latest` tag: `docker build -t my-app:latest .`
+
+### When Tags Matter
+
+For a single version of an image (such as during learning or local development),
+tags are not critical. Leaving everything as `latest` works fine.
+
+Tags become important when managing multiple versions of the same application:
+
+```
+docker build -t my-app:1.0 .       # Version 1.0
+# (update code)
+docker build -t my-app:2.0 .       # Version 2.0
+# (update code again)
+docker build -t my-app:3.0 .       # Version 3.0
+```
+
+Now there are three distinct images. To run a specific version:
+
+```
+docker run my-app:1.0    # Runs version 1.0
+docker run my-app:2.0    # Runs version 2.0
+docker run my-app:3.0    # Runs version 3.0
+```
+
+### Applying Multiple Tags to One Image
+
+An image can have more than one tag. This is commonly used to tag a specific
+version and also update `latest` to point to it:
+
+```
+docker build -t my-app:3.0 -t my-app:latest .
+```
+
+This creates a single image with two tags: `my-app:3.0` and `my-app:latest`.
+Both tags point to the exact same image. This way, `docker run my-app` (which
+looks for `latest`) will run version 3.0.
+
+### Tag Behavior Summary
+
+| Command                               | Resulting image tag       |
+|---------------------------------------|---------------------------|
+| `docker build -t my-app .`            | `my-app:latest`           |
+| `docker build -t my-app:latest .`     | `my-app:latest`           |
+| `docker build -t my-app:2.0 .`        | `my-app:2.0` (no latest)  |
+| `docker build -t my-app:2.0 -t my-app:latest .` | Both `my-app:2.0` and `my-app:latest` |
+| `docker run my-app`                   | Looks for `my-app:latest` |
+| `docker run my-app:2.0`               | Looks for `my-app:2.0`    |
+
+---
+
+## Running an Image and Reading the Output
+
+### What Happens When docker run Executes
+
+When `docker run` is used to start a container, Docker:
+
+1. Locates the specified image on the local machine (or pulls it from Docker Hub
+   if not found locally).
+2. Creates a new, isolated container from that image.
+3. Executes the CMD instruction defined in the Dockerfile.
+4. Streams the output from the container to the terminal.
+5. When the application finishes, the container exits.
+
+### Example: Running a Custom-Built Image
+
+```
+docker run my-docker-app
+```
+
+### Sample Output
+
+```
+> executeApp
+> node ./dist/app.js
+
+Hello Docker
+```
+
+This output tells us:
+
+- `> executeApp` -- npm is running the script named "executeApp" from package.json.
+- `> node ./dist/app.js` -- npm shows the actual command that the script runs.
+- `Hello Docker` -- The application's output. This is the `console.log` statement
+  from app.ts, now compiled to dist/app.js and executed by Node.js.
+
+The container then exits with code 0 (success) because the application finished
+without errors.
+
+### Verifying the Container After It Runs
+
+After `docker run` completes, the container still exists in a stopped state.
+Running `docker ps -a` will show it:
+
+```
+CONTAINER ID   IMAGE            COMMAND                  STATUS                     NAMES
+7f8a2b3c4d5e   my-docker-app    "docker-entrypoint.s…"   Exited (0) 5 seconds ago   happy_bell
+```
+
+The STATUS column shows "Exited (0)" -- the container ran, the application
+completed successfully, and the container stopped. Exit code 0 confirms no
+errors occurred.
+
+### What If the Output Shows an Error?
+
+If the application inside the container fails, the output would show the error
+message and the container would exit with a non-zero code:
+
+```
+docker run my-docker-app
+```
+
+```
+> executeApp
+> node ./dist/app.js
+
+Error: Cannot find module './dist/app.js'
+```
+
+Running `docker ps -a` would then show:
+
+```
+CONTAINER ID   IMAGE            STATUS                   NAMES
+7f8a2b3c4d5e   my-docker-app    Exited (1) 3 seconds ago happy_bell
+```
+
+Exit code 1 (or any non-zero number) indicates that the application encountered
+an error. The error message in the terminal output explains what went wrong.
+
+---
+
 ## Quick Reference
 
 | Command            | Purpose                                                     |
 |--------------------|-------------------------------------------------------------|
+| docker build       | Build an image from a Dockerfile                             |
+| docker build -t    | Build and assign a name (tag) to the image                   |
+| docker build -f    | Build using a specific Dockerfile (not the default)          |
 | docker run         | Create a new container from an image and run it              |
 | docker start       | Restart an existing stopped container                        |
 | docker ps          | List containers that are currently running                   |
 | docker ps -a       | List all containers (running, stopped, and created)          |
 | docker images      | List all images stored on the local machine                  |
+| docker inspect     | Display detailed information about an image or container     |
 | docker --version   | Display the installed Docker version                         |
 | docker info        | Display detailed Docker system information                   |
